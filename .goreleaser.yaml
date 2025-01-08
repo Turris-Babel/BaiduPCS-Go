@@ -1,0 +1,260 @@
+version: 2
+
+builds:
+  # Linux amd64
+  - id: linux-amd64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - linux
+    goarch:
+      - amd64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Linux arm64
+  - id: linux-arm64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - linux
+    goarch:
+      - arm64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Linux armv7
+  - id: linux-armv7-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - linux
+    goarch:
+      - arm
+    goarm:
+      - 7
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Linux armv5
+  - id: linux-armv5-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - linux
+    goarch:
+      - arm
+    goarm:
+      - 5
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # macOS amd64
+  - id: darwin-amd64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # macOS arm64 (Apple Silicon)
+  - id: darwin-arm64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Windows amd64
+  - id: windows-amd64-v1
+    main: ./
+    binary: BaiduPCS-GO.exe
+    goos:
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Windows 386
+  - id: windows-386-v1
+    main: ./
+    binary: BaiduPCS-GO.exe
+    goos:
+      - windows
+    goarch:
+      - 386
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Android amd64
+  - id: android-amd64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - android
+    goarch:
+      - amd64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Android arm64
+  - id: android-arm64-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - android
+    goarch:
+      - arm64
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # Android armv7
+  - id: android-armv7-v1
+    main: ./
+    binary: BaiduPCS-GO
+    goos:
+      - android
+    goarch:
+      - arm
+    goarm:
+      - 7
+    flags:
+      - -mod=readonly
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  # Linux amd64
+  - id: linux-amd64-archive-v1
+    builds:
+      - linux-amd64-v1
+    name_template: "xixunyunsign_{{ .Version }}_linux_amd64"
+    format: zip
+    wrap_in_directory: true
+
+  # Linux arm64
+  - id: linux-arm64-archive-v1
+    builds:
+      - linux-arm64-v1
+    name_template: "xixunyunsign_{{ .Version }}_linux_arm64"
+    format: zip
+    wrap_in_directory: true
+
+  # Linux armv7
+  - id: linux-armv7-archive-v1
+    builds:
+      - linux-armv7-v1
+    name_template: "xixunyunsign_{{ .Version }}_linux_armv7"
+    format: zip
+    wrap_in_directory: true
+
+  # Linux armv5
+  - id: linux-armv5-archive-v1
+    builds:
+      - linux-armv5-v1
+    name_template: "xixunyunsign_{{ .Version }}_linux_armv5"
+    format: zip
+    wrap_in_directory: true
+
+  # macOS amd64
+  - id: darwin-amd64-archive-v1
+    builds:
+      - darwin-amd64-v1
+    name_template: "xixunyunsign_{{ .Version }}_darwin_amd64"
+    format: zip
+    wrap_in_directory: true
+
+  # macOS arm64
+  - id: darwin-arm64-archive-v1
+    builds:
+      - darwin-arm64-v1
+    name_template: "xixunyunsign_{{ .Version }}_darwin_arm64"
+    format: zip
+    wrap_in_directory: true
+
+  # Windows amd64
+  - id: windows-amd64-archive-v1
+    builds:
+      - windows-amd64-v1
+    name_template: "xixunyunsign_{{ .Version }}_windows_amd64"
+    format: zip
+    wrap_in_directory: true
+
+  # Windows 386
+  - id: windows-386-archive-v1
+    builds:
+      - windows-386-v1
+    name_template: "xixunyunsign_{{ .Version }}_windows_386"
+    format: zip
+    wrap_in_directory: true
+
+  # Android amd64
+  - id: android-amd64-archive-v1
+    builds:
+      - android-amd64-v1
+    name_template: "xixunyunsign_{{ .Version }}_android_amd64"
+    format: zip
+    wrap_in_directory: true
+
+  # Android arm64
+  - id: android-arm64-archive-v1
+    builds:
+      - android-arm64-v1
+    name_template: "xixunyunsign_{{ .Version }}_android_arm64"
+    format: zip
+    wrap_in_directory: true
+
+  # Android armv7
+  - id: android-armv7-archive-v1
+    builds:
+      - android-armv7-v1
+    name_template: "xixunyunsign_{{ .Version }}_android_armv7"
+    format: zip
+    wrap_in_directory: true
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ .Tag }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+release:
+  github:
+    owner: theshdowaura
+    name: BaiduPCS-GO
+  prerelease: auto
+  draft: false
