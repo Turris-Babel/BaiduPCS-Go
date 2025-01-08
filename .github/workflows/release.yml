@@ -1,3 +1,4 @@
+# release.yml
 name: Release
 
 on:
@@ -26,11 +27,13 @@ jobs:
         with:
           go-version: '1.22'
 
-      # 3. 安装必要依赖，包括 Android NDK
+      # 3. 安装必要依赖，包括 ARM 交叉编译器和 Android NDK
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libcurl4-openssl-dev pkg-config unzip
+          # 安装 ARM 交叉编译器
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
           # 下载并解压 Android NDK 到 $HOME 目录
           curl -sSL https://dl.google.com/android/repository/android-ndk-r25b-linux.zip -o $HOME/android-ndk.zip
           unzip $HOME/android-ndk.zip -d $HOME
@@ -45,7 +48,13 @@ jobs:
         run: |
           echo "LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib/arm-linux-gnueabihf" >> $GITHUB_ENV
 
-      # 5. 运行 GoReleaser
+      # 5. 验证 ARM 交叉编译器是否安装成功
+      - name: Verify ARM Cross Compiler
+        run: |
+          arm-linux-gnueabihf-gcc --version
+          arm-linux-gnueabihf-g++ --version
+
+      # 6. 运行 GoReleaser
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:

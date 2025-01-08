@@ -1,3 +1,4 @@
+# goreleaser.yaml
 version: 2
 
 builds:
@@ -37,6 +38,10 @@ builds:
       - arm
     goarm:
       - 7
+    env:
+      - CGO_ENABLED=1
+      - CC=arm-linux-gnueabihf-gcc
+      - CXX=arm-linux-gnueabihf-g++
     flags:
       - -mod=readonly
     ldflags:
@@ -143,25 +148,6 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-#  # Android armv7
-#  - id: android-armv7-v1
-#    main: ./
-#    binary: BaiduPCS-GO
-#    goos:
-#      - android
-#    goarch:
-#      - arm
-#    goarm:
-#      - 7
-#    env:
-#      - CGO_ENABLED=1
-#      - CC=armv7a-linux-androideabi21-clang
-#      - CXX=armv7a-linux-androideabi21-clang++
-#    flags:
-#      - -mod=readonly
-#    ldflags:
-#      - -s -w -X main.version={{.Version}}
-
 archives:
   # Linux amd64
   - id: linux-amd64-archive-v1
@@ -242,14 +228,6 @@ archives:
     name_template: "BaiduPCS-GO_{{ .Version }}_android_arm64"
     format: zip
     wrap_in_directory: true
-
-#  # Android armv7
-#  - id: android-armv7-archive-v1
-#    builds:
-#      - android-armv7-v1
-#    name_template: "BaiduPCS-GO_{{ .Version }}_android_armv7"
-#    format: zip
-#    wrap_in_directory: true
 
 checksum:
   name_template: 'checksums.txt'
