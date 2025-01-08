@@ -1,18 +1,32 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/qrcode"
+	"github.com/mattn/go-colorable"
+	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsupdate"
+	"image"
 	"os/exec"
+
+	"github.com/qjfoidnh/BaiduPCS-Go/client"
+	"net/http"
+	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/mdp/qrterminal"
 	"github.com/olekukonko/tablewriter"
 	"github.com/peterh/liner"
 	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs"
@@ -20,7 +34,6 @@ import (
 	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsconfig"
 	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsfunctions/pcsdownload"
 	_ "github.com/qjfoidnh/BaiduPCS-Go/internal/pcsinit"
-	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsupdate"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsliner"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsliner/args"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcstable"
@@ -31,6 +44,7 @@ import (
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/getip"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/pcstime"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsverbose"
+	"github.com/robertkrimen/otto"
 	"github.com/urfave/cli"
 )
 
@@ -39,23 +53,22 @@ const (
 	NameShortDisplayNum = 16
 
 	cryptoDescription = `
-	可用的方法 <method>:
-		aes-128-ctr, aes-192-ctr, aes-256-ctr,
-		aes-128-cfb, aes-192-cfb, aes-256-cfb,
-		aes-128-ofb, aes-192-ofb, aes-256-ofb.
+可用的方法 <method>:
+	aes-128-ctr, aes-192-ctr, aes-256-ctr,
+	aes-128-cfb, aes-192-cfb, aes-256-cfb,
+	aes-128-ofb, aes-192-ofb, aes-256-ofb.
 
-	密钥 <key>:
-		aes-128 对应key长度为16, aes-192 对应key长度为24, aes-256 对应key长度为32,
-		如果key长度不符合, 则自动修剪key, 舍弃超出长度的部分, 长度不足的部分用'\0'填充.
+密钥 <key>:
+	aes-128 对应key长度为16, aes-192 对应key长度为24, aes-256 对应key长度为32,
+	如果key长度不符合, 则自动修剪key, 舍弃超出长度的部分, 长度不足的部分用'\0'填充.
 
-	GZIP <disable-gzip>:
-		在文件加密之前, 启用GZIP压缩文件; 文件解密之后启用GZIP解压缩文件, 默认启用,
-		如果不启用, 则无法检测文件是否解密成功, 解密文件时会保留源文件, 避免解密失败造成文件数据丢失.`
+GZIP <disable-gzip>:
+	在文件加密之前, 启用GZIP压缩文件; 文件解密之后启用GZIP解压缩文件, 默认启用,
+	如果不启用, 则无法检测文件是否解密成功, 解密文件时会保留源文件, 避免解密失败造成文件数据丢失.`
 )
 
 var (
 	// Version 版本号
-	//Version = "v3.9.4-devel"
 	Version = "v3.9.6-devel"
 
 	historyFilePath = filepath.Join(pcsconfig.GetConfigDir(), "pcs_command_history.txt")
@@ -77,6 +90,360 @@ var (
 	isCli bool
 )
 
+// QrImageData represents the QR code image data response
+type QrImageData struct {
+	ImageUrl string `json:"imgurl"`
+	Errno    int64  `json:"errno"`
+	Sign     string `json:"sign"`
+}
+
+// QueryData represents the response from querying QR code status
+type QueryData struct {
+	ChannelV string `json:"channel_v"`
+}
+
+// LoginData represents the response after login
+type LoginData struct {
+	Data SessionData `json:"data"`
+}
+
+type SessionData struct {
+	Session SessionInfo `json:"session"`
+}
+
+type SessionInfo struct {
+	Bduss      string `json:"bduss"`
+	Stoken     string `json:"stoken"`
+	Ptoken     string `json:"ptoken"`
+	StokenList string `json:"stokenList"` // 保留原始 JSON 字符串
+}
+
+// QrCodeLogin handles QR code login
+type QrCodeLogin struct {
+	httpClient *client.HTTPClient
+}
+
+func (q *QrCodeLogin) InitClient() {
+	// 这里创建新版 HTTPClient（已实现 FetchWithHeaders、Get 等）
+	q.httpClient = client.NewHTTPClient()
+}
+
+// GenerateGid 生成随机gid
+func (q *QrCodeLogin) GenerateGid() (string, error) {
+	vm := otto.New()
+	_, err := vm.Run(`
+        function generate_gid() {
+            return "xxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(e) {
+                var t = 16 * Math.random() | 0
+                var n = "x" === e ? t : 3 & t | 8;
+                return n.toString(16)
+            }).toUpperCase()
+        }
+    `)
+	if err != nil {
+		return "", err
+	}
+	value, err := vm.Call("generate_gid", nil)
+	if err != nil {
+		return "", err
+	}
+	return value.String(), nil
+}
+
+// GetQrCode 获取登录二维码链接
+func (q *QrCodeLogin) GetQrCode(gid string) (string, string, error) {
+	t := int64(time.Now().Unix() * 1000)
+	t1 := t + 21232
+	t2 := t1 + 4
+	callBack := fmt.Sprintf("tangram_guid_%d", t)
+	webUrl := fmt.Sprintf("https://passport.baidu.com/v2/api/getqrcode?lp=pc&qrloginfrom=pc&gid=%s&callback=%s&apiver=v3&tt=%d&tpl=netdisk&_=%d",
+		gid, callBack, t1, t2)
+
+	headers := map[string]string{
+		"Accept":          "*/*",
+		"Accept-Encoding": "gzip, deflate, br",
+		"Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8",
+		"Connection":      "keep-alive",
+		"Host":            "passport.baidu.com",
+		"Referer":         "https://pan.baidu.com/",
+		"Sec-Fetch-Dest":  "script",
+		"Sec-Fetch-Mode":  "no-cors",
+		"Sec-Fetch-Site":  "same-site",
+		"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.116 Safari/537.36",
+	}
+
+	respBody, err := q.httpClient.Fetch(webUrl, http.MethodGet, headers, nil)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println("Response from getQrCode:", string(respBody))
+
+	parsedBody, err := q.ParseCallBackData(callBack, respBody)
+	if err != nil {
+		return "", "", err
+	}
+
+	var qrData QrImageData
+	err = json.Unmarshal(parsedBody, &qrData)
+	if err != nil {
+		return "", "", err
+	}
+
+	if qrData.Errno != 0 {
+		return "", "", fmt.Errorf("获取二维码失败, errno: %d", qrData.Errno)
+	}
+
+	// 确保 imageUrl 带协议
+	if !strings.HasPrefix(qrData.ImageUrl, "http://") && !strings.HasPrefix(qrData.ImageUrl, "https://") {
+		qrData.ImageUrl = "https://" + qrData.ImageUrl
+	}
+
+	return qrData.ImageUrl, qrData.Sign, nil
+}
+
+// DownloadQrCode 下载二维码并在终端上打印生成的二维码图案
+func (q *QrCodeLogin) DownloadQrCode(imageUrl string) error {
+	if !strings.HasPrefix(imageUrl, "http://") && !strings.HasPrefix(imageUrl, "https://") {
+		imageUrl = "https://" + imageUrl
+	}
+
+	headers := map[string]string{
+		"Accept":          "image/webp,image/apng,image/*,*/*;q=0.8",
+		"Accept-Encoding": "gzip, deflate, br",
+		"Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8",
+		"Connection":      "keep-alive",
+		"Host":            "passport.baidu.com",
+		"Referer":         "https://pan.baidu.com/",
+		"Sec-Fetch-Dest":  "image",
+		"Sec-Fetch-Mode":  "no-cors",
+		"Sec-Fetch-Site":  "same-site",
+		"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.116 Safari/537.36",
+	}
+
+	respBody, err := q.httpClient.Fetch(imageUrl, http.MethodGet, headers, nil)
+	if err != nil {
+		return fmt.Errorf("下载二维码图片失败: %v", err)
+	}
+
+	qrContent, err := q.DecodeQRCode(respBody)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("扫描以下二维码以登录:")
+	q.DisplayQRCode(qrContent)
+	return nil
+}
+
+// QueryQrCode 查询二维码状态
+func (q *QrCodeLogin) QueryQrCode(channelId string, gid string) (string, error) {
+	for {
+		time.Sleep(2 * time.Second)
+		t := time.Now().Unix() * 1000
+		callBack := fmt.Sprintf("tangram_guid_%d", t)
+		t1 := t + 5
+		t2 := t1 + 5
+
+		webUrl := fmt.Sprintf("https://passport.baidu.com/channel/unicast?channel_id=%s&tpl=netdisk&gid=%s&callback=%s&apiver=v3&tt=%d&_=%d",
+			channelId, gid, callBack, t1, t2)
+		headers := map[string]string{
+			"Accept":          "*/*",
+			"Accept-Encoding": "gzip, deflate, br",
+			"Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8",
+			"Connection":      "keep-alive",
+			"Host":            "passport.baidu.com",
+			"Referer":         "https://pan.baidu.com/",
+			"Sec-Fetch-Dest":  "script",
+			"Sec-Fetch-Mode":  "no-cors",
+			"Sec-Fetch-Site":  "same-site",
+			"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.116 Safari/537.36",
+		}
+
+		respBody, err := q.httpClient.Fetch(webUrl, http.MethodGet, headers, nil)
+		if err != nil {
+			fmt.Println("查询二维码状态错误:", err.Error())
+			continue
+		}
+
+		parsedBody, err := q.ParseCallBackData(callBack, respBody)
+		if err != nil {
+			fmt.Println("解析回调数据错误:", err.Error())
+			continue
+		}
+
+		var queryData QueryData
+		err = json.Unmarshal(parsedBody, &queryData)
+		if err != nil {
+			fmt.Println("JSON 解析错误:", err.Error())
+			continue
+		}
+
+		channelV := queryData.ChannelV
+		var tempMap map[string]interface{}
+		err = json.Unmarshal([]byte(channelV), &tempMap)
+		if err != nil {
+			fmt.Println("解析 channelV 错误:", err.Error())
+			continue
+		}
+
+		v, ok := tempMap["v"].(string)
+		if ok && v != "" {
+			return v, nil
+		}
+	}
+}
+
+// Login 触发登录逻辑, 同时写入本地配置 (BDUSS, STOKEN, PTOKEN)
+func (q *QrCodeLogin) Login(channelV string) (string, string, string, string, error) {
+	t := time.Now().Unix() * 1000
+	t1 := t + 225
+	callBack := "bd__cbs__ay6xvs"
+	webUrl := fmt.Sprintf("https://passport.baidu.com/v3/login/main/qrbdusslogin?v=%d&bduss=%s&loginVersion=v4&qrcode=1&tpl=netdisk&apiver=v3&tt=%d&traceid=&time=%d&alg=v3&callback=%s",
+		t, channelV, t, t1, callBack)
+	webUrl += "&u=https%253A%252F%252Fpan.baidu.com%252Fdisk%252Fhome"
+
+	headers := map[string]string{
+		"Accept":                    "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+		"Accept-Encoding":           "deflate, br",
+		"Accept-Language":           "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+		"Cache-Control":             "max-age=0",
+		"Connection":                "keep-alive",
+		"Host":                      "passport.baidu.com",
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-User":            "?1",
+		"Upgrade-Insecure-Requests": "1",
+		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 Edg/87.0.664.66",
+	}
+
+	respBody, err := q.httpClient.Fetch(webUrl, http.MethodGet, headers, nil)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+
+	// 从响应头中获取 Set-Cookie
+	//cookies := respHeaders.Get("Set-Cookie")
+
+	parsedBody, err := q.ParseCallBackData(callBack, respBody)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("failed to parse callback data: %w", err)
+	}
+
+	text := string(parsedBody)
+
+	// 修复 JSON 格式问题并解析 loginData
+	text = strings.ReplaceAll(text, "'", "\"") // 将单引号替换为双引号
+	text = strings.TrimSpace(text)             // 去除首尾空格
+	text = strings.ReplaceAll(text, "\\", "")  // 删除多余的反斜杠
+
+	// 确保 JSON 数据格式有效
+	if !json.Valid([]byte(text)) {
+		return "", "", "", "", fmt.Errorf("invalid JSON format: %s", text)
+	}
+
+	var loginData LoginData
+	err = json.Unmarshal([]byte(text), &loginData)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("解析 JSON 错误: %w", err)
+	}
+
+	// 从 stokenList 中提取 netdisk 的 stoken
+	netdiskStoken, err := ExtractNetdiskStoken(loginData.Data.Session.StokenList)
+	if err != nil {
+		fmt.Println("提取 netdisk 的 stoken 失败:", err)
+		return "", "", "", "", err
+	}
+
+	// 更新 stoken 为 netdisk 的值
+	loginData.Data.Session.Stoken = netdiskStoken
+
+	// 配置 BDUSS, STOKEN, PTOKEN
+	bduss := loginData.Data.Session.Bduss
+	stoken := loginData.Data.Session.Stoken
+	ptoken := loginData.Data.Session.Ptoken
+	cookies := fmt.Sprintf("BDUSS=%s;PTOKEN=%s;STOKEN=%s;", bduss, ptoken, stoken)
+
+	_, err = pcsconfig.Config.SetupUserByBDUSS(bduss, "", stoken, cookies)
+	if err != nil {
+		fmt.Println("设置用户失败:", err)
+		return "", "", "", "", err
+	}
+	fmt.Printf("登录成功, BDUSS=%s\nSTOKEN=%s\nPTOKEN=%s\n", bduss, stoken, ptoken)
+
+	return bduss, stoken, ptoken, cookies, nil
+}
+
+// GetBdstoken 仅作示例
+func (q *QrCodeLogin) GetBdstoken() (string, error) {
+	webUrl := "https://tongxunlu.baidu.com"
+
+	respBody, err := q.httpClient.Fetch(webUrl, http.MethodGet, nil, nil)
+	if err != nil {
+		return "", err
+	}
+
+	reg := regexp.MustCompile(`var bdstoken = '(.*?)'`)
+	res := reg.FindAllSubmatch(respBody, -1)
+
+	if len(res) > 0 && len(res[0]) > 1 {
+		return string(res[0][1]), nil
+	}
+
+	return "", errors.New("未找到 bdstoken")
+}
+
+// ParseCallBackData 从jsonp形态的回调函数中提取JSON片段
+func (q *QrCodeLogin) ParseCallBackData(callBack string, respBody []byte) ([]byte, error) {
+	if callBack == "" {
+		return nil, errors.New("回调函数名为空")
+	}
+	reg := regexp.MustCompile(fmt.Sprintf(`%s\(([\s\S]+?)\)`, regexp.QuoteMeta(callBack)))
+	res := reg.FindAllSubmatch(respBody, -1)
+
+	if len(res) <= 0 {
+		fmt.Println("回调数据:", string(respBody))
+		return nil, errors.New("未找到匹配的回调数据")
+	}
+
+	fmt.Println("Parsed callback data:", string(res[0][1]))
+	return res[0][1], nil
+}
+
+// DecodeQRCode 将二维码图片的二进制数据解码解析出二维码内容
+func (q *QrCodeLogin) DecodeQRCode(data []byte) (string, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image: %v", err)
+	}
+
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("failed to create binary bitmap: %v", err)
+	}
+
+	qrReader := qrcode.NewQRCodeReader()
+	result, err := qrReader.Decode(bmp, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode QR code: %v", err)
+	}
+	return result.GetText(), nil
+}
+
+// DisplayQRCode 控制台生成二维码图案
+func (q *QrCodeLogin) DisplayQRCode(content string) {
+	config := qrterminal.Config{
+		Level:     qrterminal.L,
+		Writer:    colorable.NewColorableStdout(),
+		BlackChar: qrterminal.BLACK,
+		WhiteChar: qrterminal.WHITE,
+		QuietZone: 1,
+	}
+	qrterminal.GenerateWithConfig(content, config)
+}
+
+// init 初始化配置
 func init() {
 	pcsutil.ChWorkDir()
 
@@ -91,6 +458,7 @@ func init() {
 	}
 }
 
+// main 入口
 func main() {
 	defer pcsconfig.Config.Close()
 
@@ -101,20 +469,20 @@ func main() {
 	app.Copyright = "(c) 2016-2020 iikira."
 	app.Usage = "百度网盘客户端 for " + runtime.GOOS + "/" + runtime.GOARCH
 	app.Description = `BaiduPCS-Go 使用Go语言编写的百度网盘命令行客户端, 为操作百度网盘, 提供实用功能.
-	具体功能, 参见 COMMANDS 列表
+具体功能, 参见 COMMANDS 列表
 
-	特色:
-		网盘内列出文件和目录, 支持通配符匹配路径;
-		下载网盘内文件, 支持网盘内目录 (文件夹) 下载, 支持多个文件或目录下载, 支持断点续传和高并发高速下载.
+特色:
+	网盘内列出文件和目录, 支持通配符匹配路径;
+	下载网盘内文件, 支持网盘内目录 (文件夹) 下载, 支持多个文件或目录下载, 支持断点续传和高并发高速下载.
 
-	---------------------------------------------------
-	前往 https://github.com/qjfoidnh/BaiduPCS-Go 以获取更多帮助信息!
-	前往 https://github.com/qjfoidnh/BaiduPCS-Go/releases 以获取程序更新信息!
-	---------------------------------------------------
+---------------------------------------------------
+前往 https://github.com/qjfoidnh/BaiduPCS-Go 以获取更多帮助信息!
+前往 https://github.com/qjfoidnh/BaiduPCS-Go/releases 以获取程序更新信息!
+---------------------------------------------------
 
-	交流反馈:
-		提交Issue: https://github.com/qjfoidnh/BaiduPCS-Go/issues
-		邮箱: qjfoidnh@126.com`
+交流反馈:
+	提交Issue: https://github.com/qjfoidnh/BaiduPCS-Go/issues
+	邮箱: qjfoidnh@126.com`
 
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{
@@ -165,7 +533,6 @@ func main() {
 					if !strings.HasPrefix(name, line) {
 						continue
 					}
-
 					s = append(s, name+" ")
 				}
 			}
@@ -237,8 +604,6 @@ func main() {
 				return
 			}
 
-			// fmt.Println("-", targetDir, targetPath, "-")
-
 			for _, file := range files {
 				if file == nil {
 					continue
@@ -248,24 +613,19 @@ func main() {
 					appendLine string
 				)
 
-				// 已经有的情况
 				if !closed {
 					if !strings.HasPrefix(file.Path, path.Clean(path.Join(targetDir, path.Base(targetPath)))) {
 						if path.Base(targetDir) == path.Base(targetPath) {
 							appendLine = strings.Join(append(lineArgs[:numArgs-1], escaper.EscapeByRuneFunc(path.Join(targetPath, file.Filename), pcsRuneFunc)), " ")
 							goto handle
 						}
-						// fmt.Println(file.Path, targetDir, targetPath)
 						continue
 					}
-					// fmt.Println(path.Clean(path.Join(path.Dir(targetPath), file.Filename)), targetPath, file.Filename)
 					appendLine = strings.Join(append(lineArgs[:numArgs-1], escaper.EscapeByRuneFunc(path.Clean(path.Join(path.Dir(targetPath), file.Filename)), pcsRuneFunc)), " ")
 					goto handle
 				}
 				// 没有的情况
 				appendLine = strings.Join(append(lineArgs, escaper.EscapeByRuneFunc(file.Filename, pcsRuneFunc)), " ")
-				goto handle
-
 			handle:
 				if file.Isdir {
 					s = append(s, appendLine+"/")
@@ -289,11 +649,8 @@ func main() {
 			)
 
 			if activeUser.Name != "" {
-				// 格式: BaiduPCS-Go:<工作目录> <百度ID>$
-				// 工作目录太长时, 会自动缩略
 				prompt = app.Name + ":" + converter.ShortDisplay(path.Base(activeUser.Workdir), NameShortDisplayNum) + " " + activeUser.Name + "$ "
 			} else {
-				// BaiduPCS-Go >
 				prompt = app.Name + " > "
 			}
 
@@ -302,7 +659,6 @@ func main() {
 			case liner.ErrPromptAborted:
 				return
 			case nil:
-				// continue
 			default:
 				fmt.Println(err)
 				return
@@ -318,8 +674,6 @@ func main() {
 			s := []string{os.Args[0]}
 			s = append(s, cmdArgs...)
 
-			// 恢复原始终端状态
-			// 防止运行命令时程序被结束, 终端出现异常
 			line.Pause()
 			c.App.Run(s)
 			line.Resume()
@@ -354,8 +708,8 @@ func main() {
 			Name:  "env",
 			Usage: "显示程序环境变量",
 			Description: `
-	BAIDUPCS_GO_CONFIG_DIR: 配置文件路径,
-	BAIDUPCS_GO_VERBOSE: 是否启用调试.
+BAIDUPCS_GO_CONFIG_DIR: 配置文件路径,
+BAIDUPCS_GO_VERBOSE: 是否启用调试.
 `,
 			Category: "其他",
 			Action: func(c *cli.Context) error {
@@ -399,92 +753,74 @@ func main() {
 		},
 		{
 			Name:  "login",
-			Usage: "登录百度账号",
+			Usage: "登录百度账号 (二维码扫码登录)",
 			Description: `
-	示例:
-		BaiduPCS-Go login
-		BaiduPCS-Go login -username=liuhua
-		BaiduPCS-Go login -bduss=123456789 -stoken=atahsrweoog
-		BaiduPCS-Go login -cookies="BDUSS=xxxxx; BAIDUID=yyyyyy; STOKEN=zzzzz; ...."
+示例:
+    BaiduPCS-Go login
 
-	常规登录:
-		按提示一步一步来即可.
+执行该命令后, 程序会在控制台生成一个二维码, 使用百度网盘移动端应用扫描该二维码完成登录。
 
-	百度BDUSS获取方法:
-		百度搜索: 获取百度BDUSS
-		
-	百度Cookies获取办法:
-	以Chrome为例，登录到自己的百度网盘主页，F12，然后切换到Network标签，刷新页面，Network标签下会刷出一大堆东西
-	找到第一条，点击，看到右侧出现的详情，往下翻到Cookies: xxxx; xxxxx; xxx...这样的字段，从冒号后（没有空格）一直复制到字段末尾`,
+登录成功后, 程序会自动保存登录状态, 以后无需重复扫码登录。
+`,
 			Category: "百度帐号",
 			Before:   reloadFn,
 			After:    saveFunc,
 			Action: func(c *cli.Context) error {
-				var bduss, ptoken, stoken, cookies string
-				if c.IsSet("cookies") {
-					cookies = c.String("cookies")
-				} else if c.IsSet("bduss") {
-					bduss = c.String("bduss")
-					ptoken = c.String("ptoken")
-					stoken = c.String("stoken")
-				} else if c.NArg() == 0 {
-					var err error
-					bduss, ptoken, stoken, cookies, err = pcscommand.RunLogin(c.String("username"), c.String("password"))
-					if err != nil {
-						fmt.Println(err)
-						return err
-					}
-				} else {
-					cli.ShowCommandHelp(c, c.Command.Name)
-					return nil
-				}
+				qrLogin := &QrCodeLogin{}
+				qrLogin.InitClient()
 
-				baidu, err := pcsconfig.Config.SetupUserByBDUSS(bduss, ptoken, stoken, cookies)
+				// 生成 GID
+				gid, err := qrLogin.GenerateGid()
 				if err != nil {
-					fmt.Println(err)
-					return nil
+					fmt.Println("生成 GID 失败:", err)
+					return err
 				}
 
-				fmt.Println("百度帐号登录成功:", baidu.Name)
+				// 获取二维码
+				imageUrl, sign, err := qrLogin.GetQrCode(gid)
+				if err != nil {
+					fmt.Println("获取二维码失败:", err)
+					return err
+				}
+				fmt.Println("image url is:", imageUrl)
+
+				// 下载并显示二维码
+				err = qrLogin.DownloadQrCode(imageUrl)
+				if err != nil {
+					fmt.Println("下载二维码失败:", err)
+					return err
+				}
+
+				// 查询二维码状态
+				channelV, err := qrLogin.QueryQrCode(sign, gid)
+				if err != nil {
+					fmt.Println("查询二维码状态失败:", err)
+					return err
+				}
+
+				// 执行登录
+				_, _, _, cookies, err := qrLogin.Login(channelV)
+				if err != nil {
+					fmt.Println("登录失败:", err)
+					return err
+				}
+
+				// 登录成功后, BDUSS 等写到配置了, 这里仅打印
+				baidu := pcsconfig.Config.ActiveUser()
+				fmt.Println("百度帐号登录成功:", baidu.Name, "cookies=", cookies)
 				return nil
-			},
-			Flags: []cli.Flag{
-				cli.StringFlag{
-					Name:  "username",
-					Usage: "登录百度帐号的用户名(手机号/邮箱/用户名)",
-				},
-				cli.StringFlag{
-					Name:  "password",
-					Usage: "登录百度帐号的用户名的密码",
-				},
-				cli.StringFlag{
-					Name:  "bduss",
-					Usage: "使用百度 BDUSS 来登录百度帐号",
-				},
-				cli.StringFlag{
-					Name:  "ptoken",
-					Usage: "百度 PTOKEN, 配合 -bduss 参数使用 (可选)",
-				},
-				cli.StringFlag{
-					Name:  "stoken",
-					Usage: "百度 STOKEN, 配合 -bduss 参数使用 (可选, 欲使用转存功能则必选)",
-				},
-				cli.StringFlag{
-					Name:  "cookies",
-					Usage: "使用百度 Cookies 来登录百度账号",
-				},
 			},
 		},
 		{
 			Name:  "su",
 			Usage: "切换百度帐号",
 			Description: `
-	切换已登录的百度帐号:
-	如果运行该条命令没有提供参数, 程序将会列出所有的百度帐号, 供选择切换.
+切换已登录的百度帐号:
+如果运行该条命令没有提供参数, 程序将会列出所有的百度帐号, 供选择切换.
 
-	示例:
-	BaiduPCS-Go su
-	BaiduPCS-Go su <uid or name>
+示例:
+BaiduPCS-Go su
+BaiduPCS-Go su <uid or name>
 `,
 			Category: "百度帐号",
 			Before:   reloadFn,
@@ -496,7 +832,6 @@ func main() {
 				}
 
 				numLogins := pcsconfig.Config.NumLogins()
-
 				if numLogins == 0 {
 					fmt.Printf("未设置任何百度帐号, 不能切换\n")
 					return nil
@@ -511,17 +846,13 @@ func main() {
 					// 直接切换
 					uid, _ = strconv.ParseUint(inputData, 10, 64)
 				} else if c.NArg() == 0 {
-					// 输出所有帐号供选择切换
 					cli.HandleAction(app.Command("loglist").Action, c)
-
-					// 提示输入 index
 					var index string
 					fmt.Printf("输入要切换帐号的 # 值 > ")
 					_, err := fmt.Scanln(&index)
 					if err != nil {
 						return nil
 					}
-
 					if n, err := strconv.Atoi(index); err == nil && n >= 0 && n < numLogins {
 						uid = pcsconfig.Config.BaiduUserList[n].UID
 					} else {
@@ -561,12 +892,10 @@ func main() {
 					fmt.Println("未设置任何百度帐号, 不能退出")
 					return nil
 				}
-
 				var (
 					confirm    string
 					activeUser = pcsconfig.Config.ActiveUser()
 				)
-
 				if !c.Bool("y") {
 					fmt.Printf("确认退出百度帐号: %s ? (y/n) > ", activeUser.Name)
 					_, err := fmt.Scanln(&confirm)
@@ -574,14 +903,12 @@ func main() {
 						return err
 					}
 				}
-
 				deletedUser, err := pcsconfig.Config.DeleteUser(&pcsconfig.BaiduBase{
 					UID: activeUser.UID,
 				})
 				if err != nil {
 					fmt.Printf("退出用户 %s, 失败, 错误: %s\n", activeUser.Name, err)
 				}
-
 				fmt.Printf("退出用户成功, %s\n", deletedUser.Name)
 				return nil
 			},
@@ -607,13 +934,13 @@ func main() {
 			Name:  "setastoken",
 			Usage: "设定当前账号的accessToken",
 			Description: `
-	设定当前登录帐号的accessToken:
-	若不使用秒传链接转存, 可不设定; accessToken申请及获取教程:
-	https://github.com/qjfoidnh/BaiduPCS-Go/wiki/accessToken%E8%8E%B7%E5%8F%96%E6%95%99%E7%A8%8B
-	注意accessToken的有效期为一个月, 过期后请按教程指导更新token
+设定当前登录帐号的accessToken:
+若不使用秒传链接转存, 可不设定; accessToken申请及获取教程:
+https://github.com/qjfoidnh/BaiduPCS-Go/wiki/accessToken%E8%8E%B7%E5%8F%96%E6%95%99%E7%A8%8B
+注意accessToken的有效期为一个月, 过期后请按教程指导更新token
 
-	示例:
-	BaiduPCS-Go setastoken 156.182v9052tgf1006c89891bsfb2401974.YmKOAwBD9yGaG2s4p5NNkX4CXeIbJxx4hAxotfS.PyuHEs
+示例:
+BaiduPCS-Go setastoken 156.182v9052tgf1006c89891bsfb2401974.YmKOAwBD9yGaG2s4p5NNkX4CXeIbJxx4hAxotfS.PyuHEs
 `,
 			Category: "百度帐号",
 			Before:   reloadFn,
@@ -645,7 +972,8 @@ func main() {
 			Before:      reloadFn,
 			Action: func(c *cli.Context) error {
 				activeUser := pcsconfig.Config.ActiveUser()
-				fmt.Printf("当前帐号 uid: %d, 用户名: %s, 性别: %s, 年龄: %.1f\n", activeUser.UID, activeUser.Name, activeUser.Sex, activeUser.Age)
+				fmt.Printf("当前帐号 uid: %d, 用户名: %s, 性别: %s, 年龄: %.1f\n",
+					activeUser.UID, activeUser.Name, activeUser.Sex, activeUser.Age)
 				return nil
 			},
 		},
@@ -665,24 +993,24 @@ func main() {
 			Category: "百度网盘",
 			Usage:    "切换工作目录",
 			Description: `
-	BaiduPCS-Go cd <目录, 绝对路径或相对路径>
+BaiduPCS-Go cd <目录, 绝对路径或相对路径>
 
-	示例:
+示例:
 
-	切换 /我的资源 工作目录:
-	BaiduPCS-Go cd /我的资源
+切换 /我的资源 工作目录:
+BaiduPCS-Go cd /我的资源
 
-	切换上级目录:
-	BaiduPCS-Go cd ..
+切换上级目录:
+BaiduPCS-Go cd ..
 
-	切换根目录:
-	BaiduPCS-Go cd /
+切换根目录:
+BaiduPCS-Go cd /
 
-	切换 /我的资源 工作目录, 并自动列出 /我的资源 下的文件和目录
-	BaiduPCS-Go cd -l 我的资源
+切换 /我的资源 工作目录, 并自动列出 /我的资源 下的文件和目录
+BaiduPCS-Go cd -l 我的资源
 
-	使用通配符:
-	BaiduPCS-Go cd /我的*
+使用通配符:
+BaiduPCS-Go cd /我的*
 `,
 			Before: reloadFn,
 			After:  saveFunc,
@@ -691,9 +1019,7 @@ func main() {
 					cli.ShowCommandHelp(c, c.Command.Name)
 					return nil
 				}
-
 				pcscommand.RunChangeDirectory(c.Args().Get(0), c.Bool("l"))
-
 				return nil
 			},
 			Flags: []cli.Flag{
@@ -709,24 +1035,24 @@ func main() {
 			Usage:     "列出目录",
 			UsageText: app.Name + " ls <目录>",
 			Description: `
-	列出当前工作目录内的文件和目录, 或指定目录内的文件和目录
+列出当前工作目录内的文件和目录, 或指定目录内的文件和目录
 
-	示例:
+示例:
 
-	列出 我的资源 内的文件和目录
-	BaiduPCS-Go ls 我的资源
+列出 我的资源 内的文件和目录
+BaiduPCS-Go ls 我的资源
 
-	绝对路径
-	BaiduPCS-Go ls /我的资源
+绝对路径
+BaiduPCS-Go ls /我的资源
 
-	降序排序
-	BaiduPCS-Go ls -desc 我的资源
+降序排序
+BaiduPCS-Go ls -desc 我的资源
 
-	按文件大小降序排序
-	BaiduPCS-Go ls -size -desc 我的资源
+按文件大小降序排序
+BaiduPCS-Go ls -size -desc 我的资源
 
-	使用通配符
-	BaiduPCS-Go ls /我的*
+使用通配符
+BaiduPCS-Go ls /我的*
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -740,7 +1066,6 @@ func main() {
 				default:
 					orderOptions.Order = baidupcs.OrderAsc
 				}
-
 				switch {
 				case c.IsSet("time"):
 					orderOptions.By = baidupcs.OrderByTime
@@ -751,11 +1076,9 @@ func main() {
 				default:
 					orderOptions.By = baidupcs.OrderByName
 				}
-
 				pcscommand.RunLs(c.Args().Get(0), &pcscommand.LsOptions{
 					Total: c.Bool("l") || c.Parent().Args().Get(0) == "ll",
 				}, orderOptions)
-
 				return nil
 			},
 			Flags: []cli.Flag{
@@ -791,19 +1114,19 @@ func main() {
 			Usage:     "搜索文件",
 			UsageText: app.Name + " search [-path=<需要检索的目录>] [-r] 关键字",
 			Description: `
-	按文件名搜索文件（不支持查找目录）。
-	默认在当前工作目录搜索.
+按文件名搜索文件（不支持查找目录）。
+默认在当前工作目录搜索.
 
-	示例:
+示例:
 
-	搜索根目录的文件
-	BaiduPCS-Go search -path=/ 关键字
+搜索根目录的文件
+BaiduPCS-Go search -path=/ 关键字
 
-	搜索当前工作目录的文件
-	BaiduPCS-Go search 关键字
+搜索当前工作目录的文件
+BaiduPCS-Go search 关键字
 
-	递归搜索当前工作目录的文件
-	BaiduPCS-Go search -r 关键字
+递归搜索当前工作目录的文件
+BaiduPCS-Go search -r 关键字
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -842,19 +1165,19 @@ func main() {
 			Usage:     "列出目录的树形图",
 			UsageText: app.Name + " tree <目录>",
 			Description: `
-	列出目录树形图。
-	默认从当前工作目录开始列出.
+列出目录树形图。
+默认从当前工作目录开始列出.
 
-	示例:
+示例:
 
-	从根目录开始列出
-	BaiduPCS-Go tree /
+从根目录开始列出
+BaiduPCS-Go tree /
 
-	只列出两层深度
-	BaiduPCS-Go tree --depth 2
+只列出两层深度
+BaiduPCS-Go tree --depth 2
 
-	同时显示文件名和fsid
-	BaiduPCS-Go tree --fsid
+同时显示文件名和fsid
+BaiduPCS-Go tree --fsid
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -915,22 +1238,22 @@ func main() {
 			Usage:     "删除文件/目录",
 			UsageText: app.Name + " rm <文件/目录的路径1> <文件/目录2> <文件/目录3> ...",
 			Description: `
-	注意: 删除多个文件和目录时, 请确保每一个文件和目录都存在, 否则删除操作会失败.
-	被删除的文件或目录可在网盘文件回收站找回.
+注意: 删除多个文件和目录时, 请确保每一个文件和目录都存在, 否则删除操作会失败.
+被删除的文件或目录可在网盘文件回收站找回.
 
-	示例:
+示例:
 
-	删除 /我的资源/1.mp4
-	BaiduPCS-Go rm /我的资源/1.mp4
+删除 /我的资源/1.mp4
+BaiduPCS-Go rm /我的资源/1.mp4
 
-	删除 /我的资源/1.mp4 和 /我的资源/2.mp4
-	BaiduPCS-Go rm /我的资源/1.mp4 /我的资源/2.mp4
+删除 /我的资源/1.mp4 和 /我的资源/2.mp4
+BaiduPCS-Go rm /我的资源/1.mp4 /我的资源/2.mp4
 
-	删除 /我的资源 内的所有文件和目录, 但不删除该目录
-	BaiduPCS-Go rm /我的资源/*
+删除 /我的资源 内的所有文件和目录, 但不删除该目录
+BaiduPCS-Go rm /我的资源/*
 
-	删除 /我的资源 整个目录 !!
-	BaiduPCS-Go rm /我的资源
+删除 /我的资源 整个目录 !!
+BaiduPCS-Go rm /我的资源
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -964,17 +1287,17 @@ func main() {
 			Name:  "cp",
 			Usage: "拷贝文件/目录",
 			UsageText: `BaiduPCS-Go cp <文件/目录> <目标文件/目录>
-	BaiduPCS-Go cp <文件/目录1> <文件/目录2> <文件/目录3> ... <目标目录>`,
+BaiduPCS-Go cp <文件/目录1> <文件/目录2> <文件/目录3> ... <目标目录>`,
 			Description: `
-	注意: 拷贝多个文件和目录时, 请确保每一个文件和目录都存在, 否则拷贝操作会失败.
+注意: 拷贝多个文件和目录时, 请确保每一个文件和目录都存在, 否则拷贝操作会失败.
 
-	示例:
+示例:
 
-	将 /我的资源/1.mp4 复制到 根目录 /
-	BaiduPCS-Go cp /我的资源/1.mp4 /
+将 /我的资源/1.mp4 复制到 根目录 /
+BaiduPCS-Go cp /我的资源/1.mp4 /
 
-	将 /我的资源/1.mp4 和 /我的资源/2.mp4 复制到 根目录 /
-	BaiduPCS-Go cp /我的资源/1.mp4 /我的资源/2.mp4 /
+将 /我的资源/1.mp4 和 /我的资源/2.mp4 复制到 根目录 /
+BaiduPCS-Go cp /我的资源/1.mp4 /我的资源/2.mp4 /
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -992,20 +1315,20 @@ func main() {
 			Name:  "mv",
 			Usage: "移动/重命名文件/目录",
 			UsageText: `移动:
-	BaiduPCS-Go mv <文件/目录1> <文件/目录2> <文件/目录3> ... <目标目录>
+BaiduPCS-Go mv <文件/目录1> <文件/目录2> <文件/目录3> ... <目标目录>
 
-	重命名:
-	BaiduPCS-Go mv <文件/目录> <重命名的文件/目录>`,
+重命名:
+BaiduPCS-Go mv <文件/目录> <重命名的文件/目录>`,
 			Description: `
-	注意: 移动多个文件和目录时, 请确保每一个文件和目录都存在, 否则移动操作会失败.
+注意: 移动多个文件和目录时, 请确保每一个文件和目录都存在, 否则移动操作会失败.
 
-	示例:
+示例:
 
-	将 /我的资源/1.mp4 移动到 根目录 /
-	BaiduPCS-Go mv /我的资源/1.mp4 /
+将 /我的资源/1.mp4 移动到 根目录 /
+BaiduPCS-Go mv /我的资源/1.mp4 /
 
-	将 /我的资源/1.mp4 重命名为 /我的资源/3.mp4
-	BaiduPCS-Go mv /我的资源/1.mp4 /我的资源/3.mp4
+将 /我的资源/1.mp4 重命名为 /我的资源/3.mp4
+BaiduPCS-Go mv /我的资源/1.mp4 /我的资源/3.mp4
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1025,34 +1348,34 @@ func main() {
 			Usage:     "下载文件/目录",
 			UsageText: app.Name + " download <文件/目录路径1> <文件/目录2> <文件/目录3> ...",
 			Description: `
-	下载的文件默认保存到, 程序所在目录的 download/ 目录.
-	通过 BaiduPCS-Go config set -savedir <savedir>, 自定义保存的目录.
-	支持多个文件或目录下载.
-	支持下载完成后自动校验文件, 但并不是所有的文件都支持校验!
-	自动跳过下载重名的文件!
+下载的文件默认保存到, 程序所在目录的 download/ 目录.
+通过 BaiduPCS-Go config set -savedir <savedir>, 自定义保存的目录.
+支持多个文件或目录下载.
+支持下载完成后自动校验文件, 但并不是所有的文件都支持校验!
+自动跳过下载重名的文件!
 
-	下载模式说明:
-		pcs: 通过百度网盘的 PCS API 下载, locate模式提示user is not authorized可尝试此模式
-		stream: 通过百度网盘的 PCS API, 以流式文件的方式下载, 效果同 pcs
-		locate: 默认的下载模式。从百度网盘 Android 客户端, 获取下载链接的方式来下载
+下载模式说明:
+	pcs: 通过百度网盘的 PCS API 下载, locate模式提示user is not authorized可尝试此模式
+	stream: 通过百度网盘的 PCS API, 以流式文件的方式下载, 效果同 pcs
+	locate: 默认的下载模式。从百度网盘 Android 客户端, 获取下载链接的方式来下载
 
-	示例:
+示例:
 
-	设置保存目录, 保存到 D:\Downloads
-	注意区别反斜杠 "\" 和 斜杠 "/" !!!
-	BaiduPCS-Go config set -savedir D:\\Downloads
-	或者
-	BaiduPCS-Go config set -savedir D:/Downloads
+设置保存目录, 保存到 D:\Downloads
+注意区别反斜杠 "\" 和 斜杠 "/" !!!
+BaiduPCS-Go config set -savedir D:\\Downloads
+或者
+BaiduPCS-Go config set -savedir D:/Downloads
 
-	下载 /我的资源/1.mp4
-	BaiduPCS-Go d /我的资源/1.mp4
+下载 /我的资源/1.mp4
+BaiduPCS-Go d /我的资源/1.mp4
 
-	下载 /我的资源 整个目录!!
-	BaiduPCS-Go d /我的资源
+下载 /我的资源 整个目录!!
+BaiduPCS-Go d /我的资源
 
-	下载网盘内的全部文件!!
-	BaiduPCS-Go d /
-	BaiduPCS-Go d *
+下载网盘内的全部文件!!
+BaiduPCS-Go d /
+BaiduPCS-Go d *
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1176,32 +1499,32 @@ func main() {
 			Usage:     "上传文件/目录",
 			UsageText: app.Name + " upload <本地文件/目录的路径1> <文件/目录2> <文件/目录3> ... <目标目录>",
 			Description: `
-	上传默认采用分片上传的方式, 上传的文件将会保存到, <目标目录>.
-	当上传的文件名和网盘的目录名称相同时, 不会覆盖目录, 防止丢失数据.
+上传默认采用分片上传的方式, 上传的文件将会保存到, <目标目录>.
+当上传的文件名和网盘的目录名称相同时, 不会覆盖目录, 防止丢失数据.
 
-	注意: 
+注意: 
 
-	分片上传之后, 服务器可能会记录到错误的文件md5, 可使用 fixmd5 命令尝试修复文件的MD5值, 修复md5不一定能成功, 但文件的完整性是没问题的.
-	fixmd5 命令使用方法:
-	BaiduPCS-Go fixmd5 -h
+分片上传之后, 服务器可能会记录到错误的文件md5, 可使用 fixmd5 命令尝试修复文件的MD5值, 修复md5不一定能成功, 但文件的完整性是没问题的.
+fixmd5 命令使用方法:
+BaiduPCS-Go fixmd5 -h
 
-	禁用分片上传可以保证服务器记录到正确的md5.
-	禁用分片上传时只能使用单线程上传, 指定的单个文件上传最大线程数将会无效.
+禁用分片上传可以保证服务器记录到正确的md5.
+禁用分片上传时只能使用单线程上传, 指定的单个文件上传最大线程数将会无效.
 
-	示例:
+示例:
 
-	1. 将本地的 C:\Users\Administrator\Desktop\1.mp4 上传到网盘 /视频 目录
-	注意区别反斜杠 "\" 和 斜杠 "/" !!!
-	BaiduPCS-Go upload C:/Users/Administrator/Desktop/1.mp4 /视频
+1. 将本地的 C:\Users\Administrator\Desktop\1.mp4 上传到网盘 /视频 目录
+注意区别反斜杠 "\" 和 斜杠 "/" !!!
+BaiduPCS-Go upload C:/Users/Administrator/Desktop/1.mp4 /视频
 
-	2. 将本地的 C:\Users\Administrator\Desktop\1.mp4 和 C:\Users\Administrator\Desktop\2.mp4 上传到网盘 /视频 目录
-	BaiduPCS-Go upload C:/Users/Administrator/Desktop/1.mp4 C:/Users/Administrator/Desktop/2.mp4 /视频
+2. 将本地的 C:\Users\Administrator\Desktop\1.mp4 和 C:\Users\Administrator\Desktop\2.mp4 上传到网盘 /视频 目录
+BaiduPCS-Go upload C:/Users/Administrator/Desktop/1.mp4 C:/Users/Administrator/Desktop/2.mp4 /视频
 
-	3. 将本地的 C:\Users\Administrator\Desktop 整个目录上传到网盘 /视频 目录
-	BaiduPCS-Go upload C:/Users/Administrator/Desktop /视频
+3. 将本地的 C:\Users\Administrator\Desktop 整个目录上传到网盘 /视频 目录
+BaiduPCS-Go upload C:/Users/Administrator/Desktop /视频
 
-	4. 使用相对路径
-	BaiduPCS-Go upload 1.mp4 /视频
+4. 使用相对路径
+BaiduPCS-Go upload 1.mp4 /视频
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1256,10 +1579,10 @@ func main() {
 			Usage:     "获取下载直链",
 			UsageText: app.Name + " locate <文件1> <文件2> ...",
 			Description: fmt.Sprintf(`
-	获取下载直链
+获取下载直链
 
-	若该功能无法正常使用, 提示"user is not authorized, hitcode:xxx", 尝试更换 User-Agent 为 %s:
-	BaiduPCS-Go config set -user_agent "%s"
+若该功能无法正常使用, 提示"user is not authorized, hitcode:xxx", 尝试更换 User-Agent 为 %s:
+BaiduPCS-Go config set -user_agent "%s"
 `, baidupcs.NetdiskUA, baidupcs.NetdiskUA),
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1289,16 +1612,16 @@ func main() {
 			Usage:     "手动秒传文件",
 			UsageText: app.Name + " rapidupload -length=<文件的大小> -md5=<文件的md5值> -slicemd5=<文件前256KB切片的md5值(可选)> -crc32=<文件的crc32值(可选)> <保存的网盘路径, 需包含文件名>",
 			Description: `
-	使用此功能秒传文件, 前提是知道文件的大小, md5, 前256KB切片的 md5 (可选), crc32 (可选), 且百度网盘中存在一模一样的文件.
-	上传的文件将会保存到网盘的目标目录.
-	遇到同名文件将会自动覆盖!
+使用此功能秒传文件, 前提是知道文件的大小, md5, 前256KB切片的 md5 (可选), crc32 (可选), 且百度网盘中存在一模一样的文件.
+上传的文件将会保存到网盘的目标目录.
+遇到同名文件将会自动覆盖!
 
-	可能无法秒传 20GB 以上的文件!!
+可能无法秒传 20GB 以上的文件!!
 
-	示例:
+示例:
 
-	1. 如果秒传成功, 则保存到网盘路径 /test
-	BaiduPCS-Go rapidupload -length=56276137 -md5=fbe082d80e90f90f0fb1f94adbbcfa7f -slicemd5=38c6a75b0ec4499271d4ea38a667ab61 -crc32=314332359 /test
+1. 秒传成功后, 保存到网盘路径 /test
+BaiduPCS-Go rapidupload -length=56276137 -md5=fbe082d80e90f90f0fb1f94adbbcfa7f -slicemd5=38c6a75b0ec4499271d4ea38a667ab61 -crc32=314332359 /test
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1335,13 +1658,13 @@ func main() {
 			Usage:     "手动分片上传—合并分片文件",
 			UsageText: app.Name + " createsuperfile -path=<保存的网盘路径, 需包含文件名> block1 block2 ... ",
 			Description: `
-	block1, block2 ... 为文件分片的md5值
-	上传的文件将会保存到网盘的目标目录.
-	遇到同名文件默认覆盖, 可以--policy参数指定, 支持newcopy, skip, overwrite, fail四种模式
+block1, block2 ... 为文件分片的md5值
+上传的文件将会保存到网盘的目标目录.
+遇到同名文件默认覆盖, 可以--policy参数指定, 支持newcopy, skip, overwrite, fail四种模式
 
-	示例:
+示例:
 
-	BaiduPCS-Go createsuperfile -path=1.mp4 ec87a838931d4d5d2e94a04644788a55 ec87a838931d4d5d2e94a04644788a55
+BaiduPCS-Go createsuperfile -path=1.mp4 ec87a838931d4d5d2e94a04644788a55 ec87a838931d4d5d2e94a04644788a55
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1372,21 +1695,21 @@ func main() {
 			Usage:     "修复文件MD5",
 			UsageText: app.Name + " fixmd5 <文件1> <文件2> <文件3> ...",
 			Description: `
-	尝试修复文件的MD5值, 以便于校验文件的完整性和导出文件.
+尝试修复文件的MD5值, 以便于校验文件的完整性和导出文件.
 
-	使用分片上传文件, 当文件分片数大于1时, 百度网盘服务端最终计算所得的md5值和本地的不一致, 这可能是百度网盘的bug.
-	不过把上传的文件下载到本地后，对比md5值是匹配的, 也就是文件在传输中没有发生损坏.
+使用分片上传文件, 当文件分片数大于1时, 百度网盘服务端最终计算所得的md5值和本地的不一致, 这可能是百度网盘的bug.
+不过把上传的文件下载到本地后，对比md5值是匹配的, 也就是文件在传输中没有发生损坏.
 
-	对于MD5值可能有误的文件, 程序会在获取文件的元信息时, 给出MD5值 "可能不正确" 的提示, 表示此文件可以尝试进行MD5值修复.
-	修复文件MD5不一定能成功, 原因可能是服务器未刷新, 可过几天后再尝试.
-	修复文件MD5的原理为秒传文件, 即修复文件MD5成功后, 文件的创建日期, 修改日期, fs_id, 版本历史等信息将会被覆盖, 修复的MD5值将覆盖原先的MD5值, 但不影响文件的完整性.
+对于MD5值可能有误的文件, 程序会在获取文件的元信息时, 给出MD5值 "可能不正确" 的提示, 表示此文件可以尝试进行MD5值修复.
+修复文件MD5不一定能成功, 原因可能是服务器未刷新, 可过几天后再尝试.
+修复文件MD5的原理为秒传文件, 即修复文件MD5成功后, 文件的创建日期, 修改日期, fs_id, 版本历史等信息将会被覆盖, 修复的MD5值将覆盖原先的MD5值, 但不影响文件的完整性.
 
-	注意: 无法修复 20GB 以上文件的 md5!!
+注意: 无法修复 20GB 以上文件的 md5!!
 
-	示例:
+示例:
 
-	1. 修复 /我的资源/1.mp4 的 MD5 值
-	BaiduPCS-Go fixmd5 /我的资源/1.mp4
+1. 修复 /我的资源/1.mp4 的 MD5 值
+BaiduPCS-Go fixmd5 /我的资源/1.mp4
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1406,12 +1729,12 @@ func main() {
 			Usage:     "获取本地文件的秒传信息(目前秒传功能已失效)",
 			UsageText: app.Name + " sumfile <本地文件的路径1> <本地文件的路径2> ...",
 			Description: `
-	获取本地文件的大小, md5, 前256KB切片的md5, crc32, 曾经可用于秒传文件.
+获取本地文件的大小, md5, 前256KB切片的md5, crc32, 曾经可用于秒传文件.
 
-	示例:
+示例:
 
-	获取 C:\Users\Administrator\Desktop\1.mp4 的秒传信息
-	BaiduPCS-Go sumfile C:/Users/Administrator/Desktop/1.mp4
+获取 C:\Users\Administrator\Desktop\1.mp4 的秒传信息
+BaiduPCS-Go sumfile C:/Users/Administrator/Desktop/1.mp4
 `,
 			Category: "其他",
 			Before:   reloadFn,
@@ -1456,18 +1779,17 @@ func main() {
 			Usage:     "转存文件/目录",
 			UsageText: app.Name + " transfer <分享链接> <提取码>(如果有)",
 			Category:  "百度网盘",
-			Before:    reloadFn,
 			Description: `
-			转存文件/目录
-	如果没有提取码或为整合式链接，则第二个位置留空；只能转存到当前网盘目录下，
-	分享链接支持常规百度云链接, 支持长短秒传链接
-	
-	实例：
-	BaiduPCS-Go transfer pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ 704e
-	BaiduPCS-Go transfer https://pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ 704e
-	BaiduPCS-Go transfer https://pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ?pwd=704e
+转存文件/目录
+如果没有提取码或为整合式链接，则第二个位置留空；只能转存到当前网盘目录下，
+分享链接支持常规百度云链接, 支持长短秒传链接
 
-	`,
+实例：
+BaiduPCS-Go transfer pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ 704e
+BaiduPCS-Go transfer https://pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ 704e
+BaiduPCS-Go transfer https://pan.baidu.com/s/1VYzSl7465sdrQXe8GT5RdQ?pwd=704e
+`,
+			Before: reloadFn,
 			Action: func(c *cli.Context) error {
 				if c.NArg() < 1 || c.NArg() > 2 {
 					cli.ShowCommandHelp(c, c.Command.Name)
@@ -1501,7 +1823,26 @@ func main() {
 			Usage:     "分享文件/目录",
 			UsageText: app.Name + " share",
 			Category:  "百度网盘",
-			Before:    reloadFn,
+			Description: `
+分享文件/目录操作。
+
+子命令:
+- set: 设置分享
+- list: 列出已分享
+- cancel: 取消分享
+
+示例:
+
+1. 设置分享文件
+BaiduPCS-Go share set /我的资源/1.mp4 -p=1234 -period=7
+
+2. 列出已分享的文件
+BaiduPCS-Go share list
+
+3. 取消分享
+BaiduPCS-Go share cancel 1234567890
+`,
+			Before: reloadFn,
 			Action: func(c *cli.Context) error {
 				cli.ShowCommandHelp(c, c.Command.Name)
 				return nil
@@ -1545,7 +1886,7 @@ func main() {
 				},
 				{
 					Name:      "list",
-					Aliases:   []string{"l"},
+					Aliases:   []string{"ls", "l"},
 					Usage:     "列出已分享文件/目录",
 					UsageText: app.Name + " share list",
 					Action: func(c *cli.Context) error {
@@ -1583,24 +1924,24 @@ func main() {
 			Usage:     "导出文件/目录",
 			UsageText: app.Name + " export <文件/目录1> <文件/目录2> ...",
 			Description: `
-	导出网盘内的文件或目录, 原理为秒传文件, 此操作会生成导出文件或目录的命令.
+导出网盘内的文件或目录, 原理为秒传文件, 此操作会生成导出文件或目录的命令.
 
-	注意!!! :
-	由于秒传已经失效, 导出信息已无法用做公开分享
-	无法导出 20GB 以上的文件!!
-	无法导出文件的版本历史等数据!!
-	并不是所有的文件都能导出成功, 程序会列出无法导出的文件列表.
+注意!!! :
+由于秒传已经失效, 导出信息已无法用做公开分享
+无法导出 20GB 以上的文件!!
+无法导出文件的版本历史等数据!!
+并不是所有的文件都能导出成功, 程序会列出无法导出的文件列表.
 
-	示例:
+示例:
 
-	导出当前工作目录:
-	BaiduPCS-Go export
+1. 导出当前工作目录:
+BaiduPCS-Go export
 
-	导出所有文件和目录, 并设置新的根目录为 /root 
-	BaiduPCS-Go export -root=/root /
+2. 导出所有文件和目录, 并设置新的根目录为 /root 
+BaiduPCS-Go export -root=/root /
 
-	导出 /我的资源
-	BaiduPCS-Go export /我的资源
+3. 导出 /我的资源
+BaiduPCS-Go export /我的资源
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1653,21 +1994,25 @@ func main() {
 			Aliases: []string{"clouddl", "od"},
 			Usage:   "离线下载",
 			Description: `支持http/https/ftp/电驴/磁力链协议
-	离线下载同时进行的任务数量有限, 超出限制的部分将无法添加.
+离线下载同时进行的任务数量有限, 超出限制的部分将无法添加.
 
-	示例:
+示例:
 
-	1. 将百度和腾讯主页, 离线下载到根目录 /
-	BaiduPCS-Go offlinedl add -path=/ http://baidu.com http://qq.com
+1. 将百度和腾讯主页, 离线下载到根目录 /
+BaiduPCS-Go offlinedl add -path=/ http://baidu.com http://qq.com
 
-	2. 添加磁力链接任务
-	BaiduPCS-Go offlinedl add magnet:?xt=urn:btih:xxx
+2. 添加磁力链接任务
+BaiduPCS-Go offlinedl add magnet:?xt=urn:btih:xxx
 
-	3. 查询任务ID为 12345 的离线下载任务状态
-	BaiduPCS-Go offlinedl query 12345
+3. 查询任务ID为 12345 的离线下载任务状态
+BaiduPCS-Go offlinedl query 12345
 
-	4. 取消任务ID为 12345 的离线下载任务
-	BaiduPCS-Go offlinedl cancel 12345`,
+4. 取消任务ID为 12345 的离线下载任务
+BaiduPCS-Go offlinedl cancel 12345
+
+5. 清空离线下载任务记录
+BaiduPCS-Go offlinedl delete -all
+`,
 			Category: "百度网盘",
 			Before:   reloadFn,
 			Action: func(c *cli.Context) error {
@@ -1754,7 +2099,7 @@ func main() {
 					Name:      "delete",
 					Aliases:   []string{"del", "d"},
 					Usage:     "删除离线下载任务",
-					UsageText: app.Name + " offlinedl delete 任务ID1 任务ID2 ...",
+					UsageText: app.Name + " offlinedl delete [-all] 任务ID1 任务ID2 ...",
 					Action: func(c *cli.Context) error {
 						isClear := c.Bool("all")
 						if c.NArg() < 1 && !isClear {
@@ -1791,18 +2136,18 @@ func main() {
 			Name:  "recycle",
 			Usage: "回收站",
 			Description: `
-	回收站操作.
+回收站操作.
 
-	示例:
+示例:
 
-	1. 从回收站还原两个文件, 其中的两个文件的 fs_id 分别为 1013792297798440 和 643596340463870
-	BaiduPCS-Go recycle restore 1013792297798440 643596340463870
+1. 从回收站还原两个文件, 其中的两个文件的 fs_id 分别为 1013792297798440 和 643596340463870
+BaiduPCS-Go recycle restore 1013792297798440 643596340463870
 
-	2. 从回收站删除两个文件, 其中的两个文件的 fs_id 分别为 1013792297798440 和 643596340463870
-	BaiduPCS-Go recycle delete 1013792297798440 643596340463870
+2. 从回收站删除两个文件, 其中的两个文件的 fs_id 分别为 1013792297798440 和 643596340463870
+BaiduPCS-Go recycle delete 1013792297798440 643596340463870
 
-	3. 清空回收站, 程序不会进行二次确认, 谨慎操作!!!
-	BaiduPCS-Go recycle delete -all
+3. 清空回收站, 程序不会进行二次确认, 谨慎操作!!!
+BaiduPCS-Go recycle delete -all
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -1816,7 +2161,7 @@ func main() {
 				{
 					Name:      "list",
 					Aliases:   []string{"ls", "l"},
-					Usage:     baidupcs.OperationRecycleList,
+					Usage:     "列出回收站文件/目录",
 					UsageText: app.Name + " recycle list",
 					Action: func(c *cli.Context) error {
 						pcscommand.RunRecycleList(c.Int("page"))
@@ -1833,7 +2178,7 @@ func main() {
 				{
 					Name:        "restore",
 					Aliases:     []string{"r"},
-					Usage:       baidupcs.OperationRecycleRestore,
+					Usage:       "还原回收站文件/目录",
 					UsageText:   app.Name + " recycle restore <fs_id 1> <fs_id 2> <fs_id 3> ...",
 					Description: `根据文件/目录的 fs_id, 还原回收站指定的文件或目录`,
 					Action: func(c *cli.Context) error {
@@ -1848,7 +2193,7 @@ func main() {
 				{
 					Name:        "delete",
 					Aliases:     []string{"d"},
-					Usage:       baidupcs.OperationRecycleDelete + "/" + baidupcs.OperationRecycleClear,
+					Usage:       "删除回收站文件/目录或清空回收站",
 					UsageText:   app.Name + " recycle delete [-all] <fs_id 1> <fs_id 2> <fs_id 3> ...",
 					Description: `根据文件/目录的 fs_id 或 -all 参数, 删除回收站指定的文件或目录或清空回收站`,
 					Action: func(c *cli.Context) error {
@@ -1892,19 +2237,19 @@ func main() {
 					Usage:     "修改程序配置项",
 					UsageText: app.Name + " config set [arguments...]",
 					Description: `
-	注意:
-		可通过设置环境变量 BAIDUPCS_GO_CONFIG_DIR, 指定配置文件存放的目录.
+注意:
+	可通过设置环境变量 BAIDUPCS_GO_CONFIG_DIR, 指定配置文件存放的目录.
 
-		谨慎修改 appid, user_agent, pcs_ua, pan_ua 的值, 否则访问网盘服务器时, 可能会出现错误
-		cache_size 的值支持可选设置单位了, 单位不区分大小写, b 和 B 均表示字节的意思, 如 64KB, 1MB, 32kb, 65536b, 65536
-		max_download_rate, max_upload_rate 的值支持可选设置单位了, 单位为每秒的传输速率, 后缀'/s' 可省略, 如 2MB/s, 2MB, 2m, 2mb 均为一个意思
+	谨慎修改 appid, user_agent, pcs_ua, pan_ua 的值, 否则访问网盘服务器时, 可能会出现错误
+	cache_size 的值支持可选设置单位了, 单位不区分大小写, b 和 B 均表示字节的意思, 如 64KB, 1MB, 32kb, 65536b, 65536
+	max_download_rate, max_upload_rate 的值支持可选设置单位了, 单位为每秒的传输速率, 后缀'/s' 可省略, 如 2MB/s, 2MB, 2m, 2mb 均为一个意思
 
-	例子:
-		BaiduPCS-Go config set -appid=266719
-		BaiduPCS-Go config set -enable_https=false
-		BaiduPCS-Go config set -user_agent="netdisk;2.2.51.6;netdisk;10.0.63;PC;android-android"
-		BaiduPCS-Go config set -cache_size 64KB
-		BaiduPCS-Go config set -cache_size 16384 -max_parallel 200 -savedir D:/download`,
+例子:
+	BaiduPCS-Go config set -appid=266719
+	BaiduPCS-Go config set -enable_https=false
+	BaiduPCS-Go config set -user_agent="netdisk;2.2.51.6;netdisk;10.0.63;PC;android-android"
+	BaiduPCS-Go config set -cache_size 64KB
+	BaiduPCS-Go config set -cache_size 16384 -max_parallel 200 -savedir D:/download`,
 					Action: func(c *cli.Context) error {
 						if c.NumFlags() <= 0 || c.NArg() > 0 {
 							cli.ShowCommandHelp(c, c.Command.Name)
@@ -2106,12 +2451,12 @@ func main() {
 			Usage:     "测试通配符",
 			UsageText: app.Name + " match <通配符表达式>",
 			Description: `
-	测试通配符匹配路径, 操作成功则输出所有匹配到的路径.
+测试通配符匹配路径, 操作成功则输出所有匹配到的路径.
 
-	示例:
+示例:
 
-	1. 匹配 /我的资源 目录下所有mp4格式的文件
-	BaiduPCS-Go match /我的资源/*.mp4
+1. 匹配 /我的资源 目录下所有mp4格式的文件
+BaiduPCS-Go match /我的资源/*.mp4
 `,
 			Category: "百度网盘",
 			Before:   reloadFn,
@@ -2126,12 +2471,10 @@ func main() {
 			},
 		},
 		{
-			Name:  "tool",
-			Usage: "工具箱",
-			Action: func(c *cli.Context) error {
-				cli.ShowCommandHelp(c, c.Command.Name)
-				return nil
-			},
+			Name:     "tool",
+			Usage:    "工具箱",
+			Action:   func(c *cli.Context) error { cli.ShowCommandHelp(c, c.Command.Name); return nil },
+			Category: "其他",
 			Subcommands: []cli.Command{
 				{
 					Name:  "showtime",
@@ -2164,7 +2507,7 @@ func main() {
 				{
 					Name:        "enc",
 					Usage:       "加密文件",
-					UsageText:   app.Name + " enc -method=<method> -key=<key> [files...]",
+					UsageText:   app.Name + " tool enc -method=<method> -key=<key> [files...]",
 					Description: cryptoDescription,
 					Action: func(c *cli.Context) error {
 						if c.NArg() <= 0 {
@@ -2204,7 +2547,7 @@ func main() {
 				{
 					Name:        "dec",
 					Usage:       "解密文件",
-					UsageText:   app.Name + " dec -method=<method> -key=<key> [files...]",
+					UsageText:   app.Name + " tool dec -method=<method> -key=<key> [files...]",
 					Description: cryptoDescription,
 					Action: func(c *cli.Context) error {
 						if c.NArg() <= 0 {
@@ -2244,12 +2587,9 @@ func main() {
 			},
 		},
 		{
-			Name:        "clear",
-			Aliases:     []string{"cls"},
-			Usage:       "清空控制台",
-			UsageText:   app.Name + " clear",
-			Description: "清空控制台屏幕",
-			Category:    "其他",
+			Name:    "clear",
+			Aliases: []string{"cls"},
+			Usage:   "清空控制台",
 			Action: func(c *cli.Context) error {
 				pcsliner.ClearScreen()
 				return nil
@@ -2271,4 +2611,25 @@ func main() {
 	sort.Sort(cli.CommandsByName(app.Commands))
 
 	app.Run(os.Args)
+}
+
+// htmlUnescape 解码 HTML 实体
+func htmlUnescape(input string) string {
+	replacer := strings.NewReplacer("&quot;", `"`)
+	return replacer.Replace(input)
+}
+
+// ExtractNetdiskStoken 从 stokenList 中提取 netdisk 的 stoken
+func ExtractNetdiskStoken(stokenList string) (string, error) {
+	decodedList := htmlUnescape(stokenList) // 解码 HTML 实体
+	stokens := strings.Split(decodedList, ",")
+	for _, item := range stokens {
+		if strings.HasPrefix(item, `"netdisk#`) { // 查找 netdisk 前缀
+			parts := strings.Split(item, "#")
+			if len(parts) == 2 {
+				return strings.Trim(parts[1], `"`), nil
+			}
+		}
+	}
+	return "", errors.New("未找到 netdisk 的 stoken")
 }
