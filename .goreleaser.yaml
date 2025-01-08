@@ -117,6 +117,10 @@ builds:
       - android
     goarch:
       - amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-linux-android21-clang
+      - CXX=x86_64-linux-android21-clang++
     flags:
       - -mod=readonly
     ldflags:
@@ -130,6 +134,10 @@ builds:
       - android
     goarch:
       - arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-android21-clang
+      - CXX=aarch64-linux-android21-clang++
     flags:
       - -mod=readonly
     ldflags:
@@ -145,6 +153,10 @@ builds:
       - arm
     goarm:
       - 7
+    env:
+      - CGO_ENABLED=1
+      - CC=armv7a-linux-androideabi21-clang
+      - CXX=armv7a-linux-androideabi21-clang++
     flags:
       - -mod=readonly
     ldflags:

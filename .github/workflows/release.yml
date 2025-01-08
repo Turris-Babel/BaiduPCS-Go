@@ -24,13 +24,39 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.23'
+          go-version: '1.22'
 
-      # 3. 运行 GoReleaser
+      # 3. 安装必要依赖，包括 Android NDK
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libcurl4-openssl-dev pkg-config unzip
+          # 下载并解压 Android NDK
+          curl -sSL https://dl.google.com/android/repository/android-ndk-r25b-linux.zip -o android-ndk.zip
+          unzip android-ndk.zip -d $HOME
+          export ANDROID_NDK_HOME=$HOME/android-ndk-r25b
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r25b" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+
+      # 4. 设置动态库路径，确保库可以找到
+      - name: Set LD_LIBRARY_PATH
+        run: |
+          echo "/usr/lib/aarch64-linux-gnu:/usr/lib/arm-linux-gnueabihf" >> $GITHUB_ENV
+
+      # 5. 运行 GoReleaser
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
           version: latest # 安装最新版本的 GoReleaser
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.BDPCS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # CGO 配置仅用于 Android 平台
+          CGO_ENABLED: "1"
+          CC_ANDROID_AMD64: "x86_64-linux-android21-clang"
+          CXX_ANDROID_AMD64: "x86_64-linux-android21-clang++"
+          CC_ANDROID_ARM64: "aarch64-linux-android21-clang"
+          CXX_ANDROID_ARM64: "aarch64-linux-android21-clang++"
+          CC_ANDROID_ARMV7: "armv7a-linux-androideabi21-clang"
+          CXX_ANDROID_ARMV7: "armv7a-linux-androideabi21-clang++"
+          LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu:/usr/lib/arm-linux-gnueabihf"
