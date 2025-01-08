@@ -155,7 +155,7 @@ archives:
   - id: linux-amd64-archive-v1
     builds:
       - linux-amd64-v1
-    name_template: "xixunyunsign_{{ .Version }}_linux_amd64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_linux_amd64"
     format: zip
     wrap_in_directory: true
 
@@ -163,7 +163,7 @@ archives:
   - id: linux-arm64-archive-v1
     builds:
       - linux-arm64-v1
-    name_template: "xixunyunsign_{{ .Version }}_linux_arm64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_linux_arm64"
     format: zip
     wrap_in_directory: true
 
@@ -171,7 +171,7 @@ archives:
   - id: linux-armv7-archive-v1
     builds:
       - linux-armv7-v1
-    name_template: "xixunyunsign_{{ .Version }}_linux_armv7"
+    name_template: "BaiduPCS-GO_{{ .Version }}_linux_armv7"
     format: zip
     wrap_in_directory: true
 
@@ -179,7 +179,7 @@ archives:
   - id: linux-armv5-archive-v1
     builds:
       - linux-armv5-v1
-    name_template: "xixunyunsign_{{ .Version }}_linux_armv5"
+    name_template: "BaiduPCS-GO_{{ .Version }}_linux_armv5"
     format: zip
     wrap_in_directory: true
 
@@ -187,7 +187,7 @@ archives:
   - id: darwin-amd64-archive-v1
     builds:
       - darwin-amd64-v1
-    name_template: "xixunyunsign_{{ .Version }}_darwin_amd64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_darwin_amd64"
     format: zip
     wrap_in_directory: true
 
@@ -195,7 +195,7 @@ archives:
   - id: darwin-arm64-archive-v1
     builds:
       - darwin-arm64-v1
-    name_template: "xixunyunsign_{{ .Version }}_darwin_arm64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_darwin_arm64"
     format: zip
     wrap_in_directory: true
 
@@ -203,7 +203,7 @@ archives:
   - id: windows-amd64-archive-v1
     builds:
       - windows-amd64-v1
-    name_template: "xixunyunsign_{{ .Version }}_windows_amd64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_windows_amd64"
     format: zip
     wrap_in_directory: true
 
@@ -211,7 +211,7 @@ archives:
   - id: windows-386-archive-v1
     builds:
       - windows-386-v1
-    name_template: "xixunyunsign_{{ .Version }}_windows_386"
+    name_template: "BaiduPCS-GO_{{ .Version }}_windows_386"
     format: zip
     wrap_in_directory: true
 
@@ -219,7 +219,7 @@ archives:
   - id: android-amd64-archive-v1
     builds:
       - android-amd64-v1
-    name_template: "xixunyunsign_{{ .Version }}_android_amd64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_android_amd64"
     format: zip
     wrap_in_directory: true
 
@@ -227,7 +227,7 @@ archives:
   - id: android-arm64-archive-v1
     builds:
       - android-arm64-v1
-    name_template: "xixunyunsign_{{ .Version }}_android_arm64"
+    name_template: "BaiduPCS-GO_{{ .Version }}_android_arm64"
     format: zip
     wrap_in_directory: true
 
@@ -235,7 +235,7 @@ archives:
   - id: android-armv7-archive-v1
     builds:
       - android-armv7-v1
-    name_template: "xixunyunsign_{{ .Version }}_android_armv7"
+    name_template: "BaiduPCS-GO_{{ .Version }}_android_armv7"
     format: zip
     wrap_in_directory: true
 
