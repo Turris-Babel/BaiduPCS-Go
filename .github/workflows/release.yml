@@ -80,7 +80,7 @@ jobs:
           version: latest # 安装最新版本的 GoReleaser
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.XXY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.BDPCS_TOKEN }}
           # 设置特定架构的 C 编译器
           CC_LINUX_ARM_V7: arm-linux-gnueabihf-gcc
           CC_LINUX_ARM_V5: arm-linux-gnueabi-gcc
