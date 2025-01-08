@@ -41,7 +41,7 @@ jobs:
       # 4. 设置动态库路径，确保库可以找到
       - name: Set LD_LIBRARY_PATH
         run: |
-          echo "/usr/lib/aarch64-linux-gnu:/usr/lib/arm-linux-gnueabihf" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib/arm-linux-gnueabihf" >> $GITHUB_ENV
 
       # 5. 运行 GoReleaser
       - name: Run GoReleaser
