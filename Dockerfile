@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y libc6 && apt-get clean
 COPY baidupcs /usr/local/bin/
 
 # 确保文件有可执行权限
-RUN chmod +x /usr/local/bin/xixunyunsign
+RUN chmod +x /usr/local/bin/baidupcs
 
 # 使用默认的 Apache CMD，可以通过额外命令运行二进制文件
 
