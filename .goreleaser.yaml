@@ -244,7 +244,7 @@ changelog:
 
 release:
   github:
-    owner: theshdowaura
+    owner: Turris-Babel
     name: BaiduPCS-GO
   prerelease: auto
   draft: false
