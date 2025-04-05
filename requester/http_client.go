@@ -43,7 +43,7 @@ func (h *HTTPClient) lazyInit() {
 			DisableCompression:    false, // gzip
 			MaxIdleConns:          100,
 			IdleConnTimeout:       90 * time.Second,
-			ResponseHeaderTimeout: 25 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second, // Increased timeout
 			ExpectContinueTimeout: 10 * time.Second,
 		}
 		h.Client.Transport = h.transport
@@ -81,13 +81,13 @@ func (h *HTTPClient) ResetCookiejar() {
 func (h *HTTPClient) SetHTTPSecure(b bool) {
 	h.https = b
 	h.lazyInit()
-// 	if b {
-// 		h.transport.TLSClientConfig = nil
-// 	} else {
-    h.transport.TLSClientConfig = &tls.Config{
-        InsecureSkipVerify: true,
-    }
-// 	}
+	// 	if b {
+	// 		h.transport.TLSClientConfig = nil
+	// 	} else {
+	h.transport.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	// 	}
 }
 
 // SetKeepAlive 设置 Keep-Alive

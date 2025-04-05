@@ -1,5 +1,5 @@
 # 使用 Apache 官方镜像（基于 Debian）
-FROM httpd:latest
+FROM apache:latest
 
 # 更新系统并安装 glibc
 RUN apt-get update && apt-get install -y libc6 && apt-get clean

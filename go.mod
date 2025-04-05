@@ -17,11 +17,12 @@ require (
 	github.com/qjfoidnh/baidu-tools v1.2.0 //dfa5778abeed
 	github.com/tidwall/gjson v1.6.4
 	github.com/urfave/cli v1.22.5
-	golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550
-	golang.org/x/sys v0.14.0
+	golang.org/x/crypto v0.18.0
+	golang.org/x/sys v0.16.0
 )
 
 require (
+	github.com/google/wire v0.6.0
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/mattn/go-colorable v0.1.13
 	github.com/mdp/qrterminal v1.0.1
@@ -42,7 +43,7 @@ require (
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
 	github.com/tidwall/match v1.0.1 // indirect
 	github.com/tidwall/pretty v1.0.2 // indirect
-	golang.org/x/text v0.4.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.23.0 // indirect
 	gopkg.in/sourcemap.v1 v1.0.5 // indirect
