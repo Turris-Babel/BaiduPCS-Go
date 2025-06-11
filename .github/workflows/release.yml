@@ -26,6 +26,16 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ env.GOMODCACHE }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
       # 3. 安装依赖，包括交叉编译器和动态库
       - name: Install Dependencies
         run: |
@@ -100,3 +110,9 @@ jobs:
       - name: Check ARM64 Dynamic Dependencies
         run: |
           ldd ./xixunyunsign_arm64 || echo "No ARM64 dynamic dependencies found"
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/

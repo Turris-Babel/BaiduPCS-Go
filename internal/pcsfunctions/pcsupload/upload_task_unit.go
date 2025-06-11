@@ -9,9 +9,9 @@ import (
 	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs"
 	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs/pcserror"
 	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsconfig"
-	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsfunctions"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/checksum"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/converter"
+	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/retry"
 	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/taskframework"
 	"github.com/qjfoidnh/BaiduPCS-Go/requester/rio"
 	"github.com/qjfoidnh/BaiduPCS-Go/requester/uploader"
@@ -34,8 +34,8 @@ type (
 		PCS               *baidupcs.BaiduPCS
 		UploadingDatabase *UploadingDatabase // 数据库
 		Parallel          int
-		NoRapidUpload     bool // 禁用秒传
-		NoSplitFile       bool // 禁用分片上传
+		NoRapidUpload     bool   // 禁用秒传
+		NoSplitFile       bool   // 禁用分片上传
 		Policy            string // 上传重名文件策略
 
 		UploadStatistic *UploadStatistic
@@ -57,7 +57,7 @@ const (
 )
 
 const (
-	StrUploadFailed = "上传文件失败"
+	StrUploadFailed    = "上传文件失败"
 	DefaultPrintFormat = "\r[%s] ↑ %s/%s %s/s in %s ............"
 	DefaultContentSize = 4 * converter.KB
 )
@@ -364,7 +364,7 @@ func (utu *UploadTaskUnit) OnComplete(lastRunResult *taskframework.TaskUnitRunRe
 }
 
 func (utu *UploadTaskUnit) RetryWait() time.Duration {
-	return pcsfunctions.RetryWait(utu.taskInfo.Retry())
+	return retry.Backoff(utu.taskInfo.Retry())
 }
 
 func (utu *UploadTaskUnit) Run() (result *taskframework.TaskUnitRunResult) {
