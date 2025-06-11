@@ -1428,7 +1428,7 @@ BaiduPCS-Go d *
 					FullPath:             c.Bool("fullpath"),
 				}
 
-				pcscommand.RunDownload(c.Args(), do)
+				pcscommand.RunDownload(c.Args(), do, pcsconfig.Config)
 
 				return nil
 			},

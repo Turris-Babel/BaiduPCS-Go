@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs"
+	"github.com/qjfoidnh/BaiduPCS-Go/internal/pcsconfig"
 	"path"
 	"regexp"
 	"strconv"
@@ -115,7 +116,7 @@ func RunShareTransfer(params []string, opt *baidupcs.TransferOption) {
 		fmt.Println("即将开始下载")
 		paths := strings.Split(resp["filenames"], ",")
 		paths = paths[0 : len(paths)-1]
-		RunDownload(paths, nil)
+		RunDownload(paths, nil, pcsconfig.Config)
 	}
 }
 

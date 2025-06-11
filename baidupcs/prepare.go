@@ -183,7 +183,7 @@ func (pcs *BaiduPCS) PrepareFilesDirectoriesDiff(cursor string) (dataReadCloser 
 		"clienttype": "1",
 	})
 	paramsURL := ns.URLParam()
-	dataReadCloser, pcsError = pcs.sendReqReturnReadCloser(reqTypePCS, OperationGetCursorDiff, http.MethodGet, pcsURL.String() + "&"+ paramsURL, nil, nil)
+	dataReadCloser, pcsError = pcs.sendReqReturnReadCloser(reqTypePCS, OperationGetCursorDiff, http.MethodGet, pcsURL.String()+"&"+paramsURL, nil, nil)
 	return
 }
 
@@ -191,7 +191,7 @@ func (pcs *BaiduPCS) PrepareBDStoken() (dataReadCloser io.ReadCloser, pcsError p
 	pcs.lazyInit()
 	pcsURL := pcs.generatePanURL("gettemplatevariable", map[string]string{
 		"clienttype": "0",
-		"app_id": string(pcs.appID),
+		"app_id":     strconv.Itoa(int(pcs.appID)),
 		"fields":     `["bdstoken"]`,
 	})
 	dataReadCloser, pcsError = pcs.sendReqReturnReadCloser(reqTypePCS, OperationGetBDSToken, http.MethodGet, pcsURL.String(), nil, nil)
@@ -313,10 +313,10 @@ func (pcs *BaiduPCS) prepareRapidUpload(targetPath, contentMD5, sliceMD5, crc32 
 	baiduPCSVerbose.Infof("%s URL: %s\n", OperationRapidUpload, pcsURL)
 	post := map[string]string{
 		"block_list": mergeStringList(contentMD5),
-		"path": targetPath,
-		"size": strconv.FormatInt(length, 10),
-		"isdir": "0",
-		"rtype": "3",
+		"path":       targetPath,
+		"size":       strconv.FormatInt(length, 10),
+		"isdir":      "0",
+		"rtype":      "3",
 	}
 	baiduPCSVerbose.Infof("%s URL: %s, Post: %v\n", OperationRapidUpload, pcsURL, post)
 
@@ -330,30 +330,30 @@ func (pcs *BaiduPCS) prepareRapidUpload(targetPath, contentMD5, sliceMD5, crc32 
 func (pcs *BaiduPCS) prepareRapidUploadV2(targetPath, contentMD5, sliceMD5, dataContent, crc32 string, offset, length, totalSize, dataTime int64) (dataReadCloser io.ReadCloser, pcsError pcserror.Error) {
 	pcsURL := pcs.generatePanURL("precreate", nil)
 	post := map[string]string{
-		"path":       targetPath,
-		"target_path": path.Dir(targetPath) + "/",
-		"size":       strconv.FormatInt(totalSize, 10),
-		"data_offset": strconv.FormatInt(offset, 10),
-		"isdir":      "0",
-		"local_mtime": strconv.FormatInt(dataTime, 10),
-		"local_ctime": strconv.FormatInt(dataTime, 10),
-		"rtype":      "2",
-		"checkexist": "0",
-		"autoinit":   "1",
-		"content-md5": contentMD5,
-		"slice-md5": sliceMD5,
-		"data_time": strconv.FormatInt(dataTime, 10),
-		"data_length": strconv.FormatInt(length, 10),
+		"path":         targetPath,
+		"target_path":  path.Dir(targetPath) + "/",
+		"size":         strconv.FormatInt(totalSize, 10),
+		"data_offset":  strconv.FormatInt(offset, 10),
+		"isdir":        "0",
+		"local_mtime":  strconv.FormatInt(dataTime, 10),
+		"local_ctime":  strconv.FormatInt(dataTime, 10),
+		"rtype":        "2",
+		"checkexist":   "0",
+		"autoinit":     "1",
+		"content-md5":  contentMD5,
+		"slice-md5":    sliceMD5,
+		"data_time":    strconv.FormatInt(dataTime, 10),
+		"data_length":  strconv.FormatInt(length, 10),
 		"data_content": dataContent,
-		"block_list": mergeStringList(contentMD5),
-		"mode":       "1",
+		"block_list":   mergeStringList(contentMD5),
+		"mode":         "1",
 	}
 	baiduPCSVerbose.Infof("%s URL: %s, Post: %v\n", OperationRapidUpload, pcsURL, post)
 
 	dataReadCloser, pcsError = pcs.sendReqReturnReadCloser(reqTypePan, OperationRapidUpload, http.MethodPost, pcsURL.String(), post, map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
-		"Accept": "*/*",
-		"Connection": "keep-alive",
+		"Accept":       "*/*",
+		"Connection":   "keep-alive",
 	})
 	return
 }
@@ -403,18 +403,18 @@ func (pcs *BaiduPCS) PrepareLocateDownload(pcspath string) (dataReadCloser io.Re
 		Path:   "/rest/2.0/pcs/file",
 		RawQuery: (url.Values{
 			"check_blue": []string{"1"},
-			"es": []string{"1"},
-			"esl": []string{"1"},
-			"app_id": []string{PanAppID},
-			"method": []string{"locatedownload"},
-			"path":   []string{pcspath},
-			"ver":    []string{"4.0"},
+			"es":         []string{"1"},
+			"esl":        []string{"1"},
+			"app_id":     []string{PanAppID},
+			"method":     []string{"locatedownload"},
+			"path":       []string{pcspath},
+			"ver":        []string{"4.0"},
 			"clienttype": []string{"17"},
-			"channel": []string{"0"},
-			"apn_id": []string{"1_0"},
-			"freeisp": []string{"0"},
-			"queryfree": []string{"0"},
-			"use": []string{"0"},
+			"channel":    []string{"0"},
+			"apn_id":     []string{"1_0"},
+			"freeisp":    []string{"0"},
+			"queryfree":  []string{"0"},
+			"use":        []string{"0"},
 		}).Encode() + "&" + ns.URLParam(),
 	}
 	baiduPCSVerbose.Infof("%s URL: %s\n", OperationLocateDownload, pcsURL)
@@ -601,11 +601,11 @@ func (pcs *BaiduPCS) PrepareUploadSuperfile2(uploadid, targetPath string, partse
 func (pcs *BaiduPCS) PrepareCloudDlAddTask(sourceURL, savePath string) (dataReadCloser io.ReadCloser, pcsError pcserror.Error) {
 	pcs.lazyInit()
 	pcsURL2 := pcs.generatePCSURL2("services/cloud_dl", "add_task", map[string]string{
-		"app_id": PanAppID,
-		"task_from": "0",
+		"app_id":       PanAppID,
+		"task_from":    "0",
 		"selected_idx": "1",
-		"save_path":  savePath,
-		"source_url": sourceURL,
+		"save_path":    savePath,
+		"source_url":   sourceURL,
 	})
 	baiduPCSVerbose.Infof("%s URL: %s\n", OperationCloudDlAddTask, pcsURL2)
 
@@ -618,8 +618,8 @@ func (pcs *BaiduPCS) PrepareCloudDlAddTask(sourceURL, savePath string) (dataRead
 func (pcs *BaiduPCS) PrepareCloudDlQueryTask(taskIDs string) (dataReadCloser io.ReadCloser, pcsError pcserror.Error) {
 	pcs.lazyInit()
 	pcsURL2 := pcs.generatePCSURL2("services/cloud_dl", "query_task", map[string]string{
-		"app_id": PanAppID,
-		"op_type": "1",
+		"app_id":   PanAppID,
+		"op_type":  "1",
 		"task_ids": taskIDs,
 	})
 	baiduPCSVerbose.Infof("%s URL: %s\n", OperationCloudDlQueryTask, pcsURL2)
